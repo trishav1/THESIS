@@ -1,0 +1,39 @@
+RAID0 Implementation Summary
+
+What I implemented:
+- Equal-load RAID0 simulation across multiple local "disk" directories under each storage node's storage path.
+
+How it works:
+- The StorageModule now accepts a `num_devices` parameter (default set to 2 by `storage_node.py`).
+- During storage initialization the module creates `disk0`, `disk1`, ..., `disk{N-1}` directories under the storage path.
+- When storing a file and the node is configured for RAID0 with `num_devices > 1`, the file bytes are split into N contiguous chunks (equal-load):
+  - `chunk_size = ceil(file_size / num_devices)`
+  - chunk i contains bytes `[i*chunk_size : (i+1)*chunk_size)` (last chunk may be smaller)
+- Each chunk is written atomically to a file inside its corresponding `disk{i}` directory (write to a `.tmp` file then `os.replace()` to final name).
+- Metadata for the stored file is recorded in `FileMetadata.fragments` as a mapping from 1-based chunk index -> chunk file path. Additional metadata fields `num_devices` and `chunk_size` are recorded.
+
+Read/retrieve behavior:
+- On retrieval, `StorageModule.retrieve_file()` detects the presence of `metadata.fragments` and reassembles the file by reading chunk files in index order and concatenating them.
+- If any chunk file is missing the retrieval will fail (this mirrors RAID0 semantics: no redundancy).
+
+Notes and compatibility:
+- The implementation deliberately reuses the existing `fragments` metadata field to keep retrieval logic unchanged.
+- Network fragmentation is unchanged: after reassembly the existing `fragment_size` behavior is used when sending data over UDP.
+- This is a simulated RAID0 across local directories (not real block-device RAID or remote nodes).
+
+Defaults:
+- `num_devices` is set to 2 by `storage_node.py` when constructing the StorageModule (no CLI flag added as requested).
+- Chunk size is computed automatically per-file (no fixed stripe size required). 
+
+Limitations:
+- Deleting any chunk file leads to unrecoverable data loss (expected RAID0 behavior).
+- No striping interleaving; this uses contiguous chunks to achieve equal bytes per device.
+- For production usage, a distributed storage backend and stronger consistency/error-handling would be required.
+
+Files changed:
+- `storage_module.py` — added handling to write/read equal contiguous chunks for RAID0, added metadata fields `num_devices` and `chunk_size`.
+- `storage_node.py` — passes `num_devices=2` to `StorageModule`.
+
+If you want, I can:
+- Add a unit test to verify store/retrieve and simulate a missing chunk, or
+- Expose configuration via CLI flags (e.g., `--num-devices`) if you later want runtime control.
